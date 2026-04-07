@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -20,7 +21,7 @@ var (
 func init() {
 	sendCmd.Flags().StringVar(&sendTo, "to", "", "Target user ID (ilink user ID)")
 	sendCmd.Flags().StringVar(&sendText, "text", "", "Message text to send")
-	sendCmd.Flags().StringVar(&sendMediaURL, "media", "", "Media URL to send (image/video/file)")
+	sendCmd.Flags().StringVar(&sendMediaURL, "media", "", "Media URL or local file path (image/video/file)")
 	sendCmd.MarkFlagRequired("to")
 	rootCmd.AddCommand(sendCmd)
 }
@@ -30,6 +31,7 @@ var sendCmd = &cobra.Command{
 	Short: "Send a message to a WeChat user",
 	Example: `  weclaw send --to "user_id@im.wechat" --text "Hello"
   weclaw send --to "user_id@im.wechat" --media "https://example.com/image.png"
+  weclaw send --to "user_id@im.wechat" --media "/path/to/local.png"
   weclaw send --to "user_id@im.wechat" --text "See this" --media "https://example.com/image.png"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if sendText == "" && sendMediaURL == "" {
@@ -57,7 +59,13 @@ var sendCmd = &cobra.Command{
 		}
 
 		if sendMediaURL != "" {
-			if err := messaging.SendMediaFromURL(ctx, client, sendTo, sendMediaURL, ""); err != nil {
+			var err error
+			if fi, statErr := os.Stat(sendMediaURL); statErr == nil && !fi.IsDir() {
+				err = messaging.SendMediaFromPath(ctx, client, sendTo, sendMediaURL, "")
+			} else {
+				err = messaging.SendMediaFromURL(ctx, client, sendTo, sendMediaURL, "")
+			}
+			if err != nil {
 				return fmt.Errorf("send media failed: %w", err)
 			}
 			fmt.Println("Media sent")
