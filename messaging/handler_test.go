@@ -1,7 +1,6 @@
 package messaging
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -124,21 +123,6 @@ func TestResolveAlias(t *testing.T) {
 	h.customAliases = map[string]string{"cc": "custom-claude"}
 	if got := h.resolveAlias("cc"); got != "custom-claude" {
 		t.Errorf("resolveAlias(cc) with custom = %q, want custom-claude", got)
-	}
-}
-
-func TestIsEmptyAgentResponseErr(t *testing.T) {
-	if !isEmptyAgentResponseErr(fmt.Errorf("agent returned empty response")) {
-		t.Error("expected true for acp-style error")
-	}
-	if !isEmptyAgentResponseErr(fmt.Errorf("claude returned empty response")) {
-		t.Error("expected true for cli-style error")
-	}
-	if isEmptyAgentResponseErr(fmt.Errorf("network timeout")) {
-		t.Error("expected false for other errors")
-	}
-	if isEmptyAgentResponseErr(nil) {
-		t.Error("expected false for nil")
 	}
 }
 

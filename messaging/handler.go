@@ -408,11 +408,6 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 	}
 }
 
-// isEmptyAgentResponseErr reports errors from agent.Chat when the model produced no text (ACP/CLI).
-func isEmptyAgentResponseErr(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "returned empty response")
-}
-
 // sendToDefaultAgent sends the message to the default agent and replies.
 func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, text, clientID string) {
 	go func() {
@@ -431,10 +426,6 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, 
 		var err error
 		reply, err = h.chatWithAgent(ctx, ag, msg.FromUserID, text)
 		if err != nil {
-			if isEmptyAgentResponseErr(err) {
-				log.Printf("[handler] agent returned empty response for %s, not sending reply", msg.FromUserID)
-				return
-			}
 			reply = fmt.Sprintf("Error: %v", err)
 		}
 	} else {
@@ -457,10 +448,6 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 
 	reply, err := h.chatWithAgent(ctx, ag, msg.FromUserID, message)
 	if err != nil {
-		if isEmptyAgentResponseErr(err) {
-			log.Printf("[handler] agent returned empty response for %s (agent=%s), not sending reply", msg.FromUserID, name)
-			return
-		}
 		reply = fmt.Sprintf("Error: %v", err)
 	}
 	h.sendReplyWithMedia(ctx, client, msg, name, reply, clientID)
@@ -472,7 +459,6 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 	type result struct {
 		name  string
 		reply string
-		skip  bool
 	}
 
 	ch := make(chan result, len(names))
@@ -486,11 +472,6 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 			}
 			reply, err := h.chatWithAgent(ctx, ag, msg.FromUserID, message)
 			if err != nil {
-				if isEmptyAgentResponseErr(err) {
-					log.Printf("[handler] agent %q returned empty response for %s, skipping reply", n, msg.FromUserID)
-					ch <- result{name: n, skip: true}
-					return
-				}
 				ch <- result{name: n, reply: fmt.Sprintf("Error: %v", err)}
 				return
 			}
@@ -501,9 +482,6 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 	// Send replies as they arrive
 	for range names {
 		r := <-ch
-		if r.skip {
-			continue
-		}
 		reply := fmt.Sprintf("[%s] %s", r.name, r.reply)
 		clientID := NewClientID()
 		h.sendReplyWithMedia(ctx, client, msg, r.name, reply, clientID)
@@ -560,18 +538,12 @@ func (h *Handler) allowedAttachmentRoots(agentName string) []string {
 }
 
 // chatWithAgent sends a message to an agent and returns the reply, with logging.
-// The model sees the sender's ilink user id in the prompt body; conversationID stays userID for session isolation.
 func (h *Handler) chatWithAgent(ctx context.Context, ag agent.Agent, userID, message string) (string, error) {
 	info := ag.Info()
 	log.Printf("[handler] dispatching to agent (%s) for %s", info, userID)
 
-	prompt := message
-	if userID != "" {
-		prompt = fmt.Sprintf("[WeChat user id: %s]\n\n%s", userID, message)
-	}
-
 	start := time.Now()
-	reply, err := ag.Chat(ctx, userID, prompt)
+	reply, err := ag.Chat(ctx, userID, message)
 	elapsed := time.Since(start)
 
 	if err != nil {
