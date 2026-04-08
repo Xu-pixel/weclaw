@@ -538,12 +538,18 @@ func (h *Handler) allowedAttachmentRoots(agentName string) []string {
 }
 
 // chatWithAgent sends a message to an agent and returns the reply, with logging.
+// Every turn includes the ilink user id in the prompt body; conversationID stays userID for session isolation.
 func (h *Handler) chatWithAgent(ctx context.Context, ag agent.Agent, userID, message string) (string, error) {
 	info := ag.Info()
 	log.Printf("[handler] dispatching to agent (%s) for %s", info, userID)
 
+	prompt := message
+	if userID != "" {
+		prompt = fmt.Sprintf("[WeChat user id: %s]\n\n%s", userID, message)
+	}
+
 	start := time.Now()
-	reply, err := ag.Chat(ctx, userID, message)
+	reply, err := ag.Chat(ctx, userID, prompt)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -779,10 +785,47 @@ func (h *Handler) handleImageSave(ctx context.Context, client *ilink.Client, msg
 	}
 
 	log.Printf("[handler] saved image to %s (%d bytes)", filePath, len(data))
-	reply := fmt.Sprintf("Saved: %s", fileName)
-	if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-		log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
+
+	absPath := filePath
+	if p, err := filepath.Abs(filePath); err == nil {
+		absPath = p
 	}
+
+	h.mu.RLock()
+	defaultName := h.defaultName
+	h.mu.RUnlock()
+
+	if defaultName == "" {
+		reply := fmt.Sprintf("Saved: %s", fileName)
+		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
+			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
+		}
+		return
+	}
+
+	ag, agErr := h.getAgent(ctx, defaultName)
+	if agErr != nil {
+		log.Printf("[handler] image save: default agent unavailable: %v", agErr)
+		reply := fmt.Sprintf("Saved: %s", fileName)
+		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
+			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
+		}
+		return
+	}
+
+	prompt := fmt.Sprintf(
+		"[系统] 用户发来一张图片，已保存到本地，绝对路径如下：\n%s\n\n请解析图片内容",
+		absPath,
+	)
+
+	reply, chatErr := h.chatWithAgent(ctx, ag, msg.FromUserID, prompt)
+	if chatErr != nil {
+		log.Printf("[handler] agent reply after image save: %v", chatErr)
+		reply = fmt.Sprintf("Saved: %s\n(Error: %v)", fileName, chatErr)
+	}
+
+	replyClientID := NewClientID()
+	h.sendReplyWithMedia(ctx, client, msg, defaultName, reply, replyClientID)
 }
 
 func detectImageExt(data []byte) string {
